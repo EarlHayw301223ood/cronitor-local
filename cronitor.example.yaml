@@ -1,0 +1,34 @@
+# cronitor-local configuration file
+# Copy to cronitor.yaml and adjust as needed.
+
+# Cronitor API key (optional — used for remote ping alerts)
+api_key: ""
+
+# Base URL for ping notifications (default: https://cronitor.link)
+ping_url: "https://cronitor.link"
+
+# Grace period before a missed execution triggers an alert
+grace_period: 5m
+
+jobs:
+  # Daily database backup
+  - name: db-backup
+    schedule: "0 2 * * *"       # Every day at 02:00
+    command: "/usr/local/bin/db-backup.sh"
+    timeout: 30m                 # Kill job if it runs longer than 30 minutes
+    notify:
+      - ops@example.com
+
+  # Hourly cache warm-up
+  - name: cache-warmup
+    schedule: "@hourly"
+    command: "/opt/app/scripts/warmup.sh --env production"
+    timeout: 5m
+    notify:
+      - alerts@example.com
+
+  # Weekly report generation (no external notifications)
+  - name: weekly-report
+    schedule: "0 8 * * 1"       # Every Monday at 08:00
+    command: "python3 /opt/app/reports/generate.py"
+    timeout: 1h
