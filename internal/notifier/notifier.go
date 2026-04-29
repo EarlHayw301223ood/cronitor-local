@@ -1,76 +1,48 @@
 package notifier
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 )
 
-const defaultBaseURL = "https://cronitor.link"
+// State represents the lifecycle event being reported.
+type State string
 
-// Event represents a job execution event sent to Cronitor.
-type Event struct {
-	JobName  string
-	Series   string
-	Status   string // "run", "complete", "fail"
-	Message  string
-	Duration float64
-}
+const (
+	StateRun      State = "run"
+	StateComplete State = "complete"
+	StateFail     State = "fail"
+)
 
-// Notifier sends ping events to the Cronitor API.
+// Notifier sends ping events to a remote monitoring endpoint.
 type Notifier struct {
-	APIKey  string
-	BaseURL string
+	baseURL string
+	apiKey  string
 	client  *http.Client
 }
 
-// New creates a Notifier with the given API key.
-func New(apiKey string) *Notifier {
+// New creates a Notifier targeting baseURL with the given API key.
+func New(baseURL, apiKey string) *Notifier {
 	return &Notifier{
-		APIKey:  apiKey,
-		BaseURL: defaultBaseURL,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		client:  &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
-type pingPayload struct {
-	Status  string  `json:"status"`
-	Message string  `json:"message,omitempty"`
-	Duration float64 `json:"duration,omitempty"`
-	Series  string  `json:"series,omitempty"`
-}
-
-// Ping sends an event ping for a monitored job.
-func (n *Notifier) Ping(event Event) error {
-	payload := pingPayload{
-		Status:   event.Status,
-		Message:  event.Message,
-		Duration: event.Duration,
-		Series:   event.Series,
-	}
-
-	body, err := json.Marshal(payload)
+// Ping sends a state notification for jobName.
+func (n *Notifier) Ping(jobName string, state State) {
+	url := fmt.Sprintf("%s/%s/%s?auth_key=%s", n.baseURL, jobName, state, n.apiKey)
+	resp, err := n.client.Get(url)
 	if err != nil {
-		return fmt.Errorf("notifier: marshal payload: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/%s/%s", n.BaseURL, n.APIKey, event.JobName)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("notifier: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := n.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("notifier: send ping: %w", err)
+		log.Printf("notifier: ping failed for %q (%s): %v", jobName, state, err)
+		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("notifier: unexpected status %d for job %q", resp.StatusCode, event.JobName)
+		log.Printf("notifier: server returned %d for %q (%s)", resp.StatusCode, jobName, state)
 	}
-	return nil
 }

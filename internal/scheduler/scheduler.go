@@ -1,89 +1,105 @@
 package scheduler
 
 import (
-	"log"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
-
-	"cronitor-local/internal/config"
 )
 
-// JobStatus tracks the last execution state of a cron job.
-type JobStatus struct {
-	Name      string
-	LastRun   time.Time
-	LastError error
-	RunCount  int
+// Job represents a scheduled command.
+type Job struct {
+	Name     string
+	Command  string
+	Schedule string
 }
 
-// Scheduler wraps the cron scheduler and tracks job statuses.
+type status struct {
+	LastRun    time.Time
+	LastError  error
+	RunCount   int
+	ErrorCount int
+}
+
+// Scheduler tracks registered jobs and their execution status.
 type Scheduler struct {
-	cron    *cron.Cron
-	statuses map[string]*JobStatus
-	mu      sync.RWMutex
+	mu       sync.RWMutex
+	jobs     map[string]Job
+	statuses map[string]*status
+	parser   cron.Parser
 }
 
-// New creates a new Scheduler instance.
+// New creates an empty Scheduler.
 func New() *Scheduler {
 	return &Scheduler{
-		cron:    cron.New(),
-		statuses: make(map[string]*JobStatus),
+		jobs:     make(map[string]Job),
+		statuses: make(map[string]*status),
+		parser:   cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
 
-// Register adds all jobs from the config to the cron scheduler.
-func (s *Scheduler) Register(jobs []config.Job, runner func(config.Job) error) error {
-	for _, job := range jobs {
-		j := job // capture loop variable
-		status := &JobStatus{Name: j.Name}
-		s.mu.Lock()
-		s.statuses[j.Name] = status
-		s.mu.Unlock()
-
-		_, err := s.cron.AddFunc(j.Schedule, func() {
-			log.Printf("[scheduler] running job: %s", j.Name)
-			err := runner(j)
-
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			status.LastRun = time.Now()
-			status.RunCount++
-			status.LastError = err
-
-			if err != nil {
-				log.Printf("[scheduler] job %s failed: %v", j.Name, err)
-			} else {
-				log.Printf("[scheduler] job %s completed successfully", j.Name)
-			}
-		})
-		if err != nil {
-			return err
-		}
+// Register adds a job after validating its cron schedule.
+func (s *Scheduler) Register(j Job) error {
+	if _, err := s.parser.Parse(j.Schedule); err != nil {
+		return fmt.Errorf("invalid schedule %q for job %q: %w", j.Schedule, j.Name, err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jobs[j.Name] = j
+	s.statuses[j.Name] = &status{}
 	return nil
 }
 
-// Start begins the scheduler.
-func (s *Scheduler) Start() {
-	s.cron.Start()
-	log.Println("[scheduler] started")
-}
-
-// Stop gracefully stops the scheduler.
-func (s *Scheduler) Stop() {
-	s.cron.Stop()
-	log.Println("[scheduler] stopped")
-}
-
-// Status returns a copy of the current job statuses.
-func (s *Scheduler) Status() map[string]JobStatus {
+// Due returns jobs whose schedule matches the given time (minute precision).
+func (s *Scheduler) Due(now time.Time) []Job {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]JobStatus, len(s.statuses))
-	for k, v := range s.statuses {
-		out[k] = *v
+
+	now = now.Truncate(time.Minute)
+	var due []Job
+	for _, j := range s.jobs {
+		sched, err := s.parser.Parse(j.Schedule)
+		if err != nil {
+			continue
+		}
+		if sched.Next(now.Add(-time.Minute)).Equal(now) {
+			due = append(due, j)
+		}
 	}
-	return out
+	return due
+}
+
+// RecordSuccess marks a successful run for the named job.
+func (s *Scheduler) RecordSuccess(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.statuses[name]; ok {
+		st.LastRun = time.Now()
+		st.RunCount++
+		st.LastError = nil
+	}
+}
+
+// RecordError marks a failed run for the named job.
+func (s *Scheduler) RecordError(name string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.statuses[name]; ok {
+		st.LastRun = time.Now()
+		st.RunCount++
+		st.ErrorCount++
+		st.LastError = err
+	}
+}
+
+// Status returns a snapshot of a job's run history.
+func (s *Scheduler) Status(name string) (runCount, errCount int, lastErr error, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st, ok := s.statuses[name]
+	if !ok {
+		return
+	}
+	return st.RunCount, st.ErrorCount, st.LastError, true
 }
