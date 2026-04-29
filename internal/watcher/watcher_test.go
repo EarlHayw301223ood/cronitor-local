@@ -1,73 +1,92 @@
 package watcher_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/user/cronitor-local/internal/notifier"
-	"github.com/user/cronitor-local/internal/runner"
-	"github.com/user/cronitor-local/internal/scheduler"
-	"github.com/user/cronitor-local/internal/watcher"
+	"github.com/yourorg/cronitor-local/internal/logger"
+	"github.com/yourorg/cronitor-local/internal/notifier"
+	"github.com/yourorg/cronitor-local/internal/runner"
+	"github.com/yourorg/cronitor-local/internal/scheduler"
+	"github.com/yourorg/cronitor-local/internal/watcher"
 )
 
-func makeTestDeps(t *testing.T, pingCounter *atomic.Int32) (*scheduler.Scheduler, *runner.Runner, *notifier.Notifier) {
+func makeTestDeps(t *testing.T, serverURL string) watcher.Deps {
 	t.Helper()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pingCounter.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
-
+	var buf bytes.Buffer
+	log := logger.New(&buf, logger.LevelDebug)
 	sched := scheduler.New()
-	r := runner.New(5 * time.Second)
-	n := notifier.New(server.URL, "test-key")
-	return sched, r, n
+	run := runner.New(runner.Options{Timeout: 5 * time.Second})
+	not := notifier.New(serverURL)
+	return watcher.Deps{
+		Scheduler: sched,
+		Runner:    run,
+		Notifier:  not,
+		Log:       log,
+		Tick:      50 * time.Millisecond,
+	}
 }
 
 func TestWatcher_ExecutesDueJob(t *testing.T) {
-	var pings atomic.Int32
-	sched, r, n := makeTestDeps(t, &pings)
+	pinged := make(chan string, 10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pinged <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-	_ = sched.Register(scheduler.Job{
-		Name:     "echo-job",
-		Command:  "echo hello",
+	deps := makeTestDeps(t, srv.URL)
+	err := deps.Scheduler.Register(scheduler.Job{
+		Name:    "echo-job",
+		Command: "echo hello",
 		Schedule: "* * * * *",
 	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
 
-	w := watcher.New(sched, r, n, 50*time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	w.Start(ctx)
+	w := watcher.New(deps)
+	go w.Run(ctx)
 
-	if pings.Load() == 0 {
-		t.Error("expected at least one ping, got none")
+	select {
+	case path := <-pinged:
+		if path == "" {
+			t.Error("expected non-empty ping path")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timed out waiting for ping")
 	}
 }
 
 func TestWatcher_StopsOnContextCancel(t *testing.T) {
-	var pings atomic.Int32
-	sched, r, n := makeTestDeps(t, &pings)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-	w := watcher.New(sched, r, n, 10*time.Millisecond)
+	deps := makeTestDeps(t, srv.URL)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
+	w := watcher.New(deps)
 	go func() {
-		w.Start(ctx)
+		w.Run(ctx)
 		close(done)
 	}()
 
 	cancel()
+
 	select {
 	case <-done:
-		// ok
+		// success
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("watcher did not stop after context cancellation")
+		t.Error("watcher did not stop after context cancel")
 	}
 }
