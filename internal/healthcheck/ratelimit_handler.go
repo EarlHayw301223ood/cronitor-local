@@ -6,40 +6,44 @@ import (
 	"time"
 )
 
-// RateLimitSnapshotter is satisfied by ratelimit.Limiter.
-type RateLimitSnapshotter interface {
-	Snapshot() map[string]time.Time
+// RateLimitStore is the interface the healthcheck server uses to query
+// rate-limit state without importing the ratelimit package directly.
+type RateLimitStore interface {
+	Records() map[string]time.Time
 }
 
-// rateLimitEntry is the JSON shape for a single job's rate-limit record.
-type rateLimitEntry struct {
-	Job      string    `json:"job"`
-	LastSent time.Time `json:"last_sent"`
-	Cooldown string    `json:"cooldown"`
-}
-
-// HandleRateLimit returns an HTTP handler that exposes the current
-// rate-limit snapshot so operators can see which jobs are suppressed.
-func HandleRateLimit(snap RateLimitSnapshotter, cooldown time.Duration) http.HandlerFunc {
+// HandleRateLimit returns an HTTP handler that serialises current rate-limit
+// records. An optional ?job= query parameter filters results to a single job.
+func HandleRateLimit(store RateLimitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		state := snap.Snapshot()
-		entries := make([]rateLimitEntry, 0, len(state))
-		for job, ts := range state {
-			entries = append(entries, rateLimitEntry{
+		filter := r.URL.Query().Get("job")
+		records := store.Records()
+
+		type entry struct {
+			Job      string `json:"job"`
+			LastSent string `json:"last_sent"`
+		}
+
+		var out []entry
+		for job, ts := range records {
+			if filter != "" && job != filter {
+				continue
+			}
+			out = append(out, entry{
 				Job:      job,
-				LastSent: ts,
-				Cooldown: cooldown.String(),
+				LastSent: ts.Format(time.RFC3339),
 			})
+		}
+		if out == nil {
+			out = []entry{}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(entries); err != nil {
-			http.Error(w, "encoding error", http.StatusInternalServerError)
-		}
+		_ = json.NewEncoder(w).Encode(out)
 	}
 }
