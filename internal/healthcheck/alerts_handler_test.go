@@ -39,6 +39,16 @@ func makeAlertStore() *stubAlertStore {
 	}
 }
 
+// decodeAlerts is a test helper that decodes a JSON response body into a slice of AlertRecord.
+func decodeAlerts(t *testing.T, w *httptest.ResponseRecorder) []AlertRecord {
+	t.Helper()
+	var got []AlertRecord
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	return got
+}
+
 func TestHandleAlerts_AllAlerts(t *testing.T) {
 	store := makeAlertStore()
 	handler := HandleAlerts(store)
@@ -51,10 +61,7 @@ func TestHandleAlerts_AllAlerts(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var got []AlertRecord
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
+	got := decodeAlerts(t, w)
 	if len(got) != 2 {
 		t.Errorf("expected 2 alerts, got %d", len(got))
 	}
@@ -72,10 +79,7 @@ func TestHandleAlerts_FilterByJob(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var got []AlertRecord
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
+	got := decodeAlerts(t, w)
 	if len(got) != 1 || got[0].JobName != "backup" {
 		t.Errorf("expected 1 backup alert, got %+v", got)
 	}
@@ -93,10 +97,7 @@ func TestHandleAlerts_UnknownJob_ReturnsEmptyArray(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var got []AlertRecord
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
+	got := decodeAlerts(t, w)
 	if len(got) != 0 {
 		t.Errorf("expected empty array, got %+v", got)
 	}
