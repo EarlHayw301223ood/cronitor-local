@@ -18,6 +18,17 @@ func makeMetrics() *metrics.Store {
 	return s
 }
 
+// decodeMetricsResponse decodes the JSON body from a metrics handler response
+// into a map of job name to Snapshot. Fails the test on decode error.
+func decodeMetricsResponse(t *testing.T, w *httptest.ResponseRecorder) map[string]metrics.Snapshot {
+	t.Helper()
+	var result map[string]metrics.Snapshot
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	return result
+}
+
 func TestHandleMetrics_ReturnsAllJobs(t *testing.T) {
 	store := makeMetrics()
 	h := &Server{metrics: store}
@@ -30,10 +41,7 @@ func TestHandleMetrics_ReturnsAllJobs(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var result map[string]metrics.Snapshot
-	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
+	result := decodeMetricsResponse(t, w)
 
 	if _, ok := result["backup"]; !ok {
 		t.Error("expected 'backup' key in response")
@@ -51,8 +59,7 @@ func TestHandleMetrics_CorrectCounts(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleMetrics(w, req)
 
-	var result map[string]metrics.Snapshot
-	json.NewDecoder(w.Body).Decode(&result)
+	result := decodeMetricsResponse(t, w)
 
 	snap := result["backup"]
 	if snap.TotalRuns != 2 {
