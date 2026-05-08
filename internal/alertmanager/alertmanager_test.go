@@ -21,11 +21,21 @@ func makeManager(t *testing.T, srv *httptest.Server) (*alertmanager.Manager, *sc
 	return alertmanager.New(n, s, l), s
 }
 
-func TestCheckAndAlert_NoJobs_ReturnsEmpty(t *testing.T) {
+// newPingTrackingServer creates a test HTTP server that records whether it was
+// called and returns the server along with a pointer to the ping flag.
+func newPingTrackingServer(t *testing.T) (*httptest.Server, *bool) {
+	t.Helper()
+	pinged := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pinged = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv, &pinged
+}
+
+func TestCheckAndAlert_NoJobs_ReturnsEmpty(t *testing.T) {
+	srv, _ := newPingTrackingServer(t)
 
 	mgr, _ := makeManager(t, srv)
 	alerts := mgr.CheckAndAlert()
@@ -35,12 +45,7 @@ func TestCheckAndAlert_NoJobs_ReturnsEmpty(t *testing.T) {
 }
 
 func TestCheckAndAlert_FailedJob_SendsAlert(t *testing.T) {
-	pinged := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pinged = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, pinged := newPingTrackingServer(t)
 
 	mgr, s := makeManager(t, srv)
 
@@ -58,18 +63,13 @@ func TestCheckAndAlert_FailedJob_SendsAlert(t *testing.T) {
 	if alerts[0].JobName != "failing-job" {
 		t.Errorf("expected job name 'failing-job', got %q", alerts[0].JobName)
 	}
-	if !pinged {
+	if !*pinged {
 		t.Error("expected notifier to be pinged")
 	}
 }
 
 func TestCheckAndAlert_OverdueJob_SendsMissAlert(t *testing.T) {
-	pinged := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pinged = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, pinged := newPingTrackingServer(t)
 
 	mgr, s := makeManager(t, srv)
 
@@ -84,7 +84,7 @@ func TestCheckAndAlert_OverdueJob_SendsMissAlert(t *testing.T) {
 	if len(alerts) != 1 {
 		t.Fatalf("expected 1 alert, got %d", len(alerts))
 	}
-	if !pinged {
+	if !*pinged {
 		t.Error("expected notifier to be pinged for missed job")
 	}
 }
