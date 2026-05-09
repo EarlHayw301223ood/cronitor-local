@@ -4,40 +4,45 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/example/cronitor-local/internal/jobstatus"
+	"github.com/your-org/cronitor-local/internal/jobstatus"
 )
 
-// JobStatusStore is the read interface required by HandleJobStatus.
-type JobStatusStore interface {
-	All() []jobstatus.Entry
-	Get(job string) (jobstatus.Entry, bool)
-}
-
-// HandleJobStatus serves the current status of all jobs, or a single job when
-// the "job" query parameter is provided.
+// HandleJobStatus returns an HTTP handler that reports the last known
+// execution status for each monitored job.
 //
-// GET /status          → all jobs
-// GET /status?job=name → single job (404 if unknown)
-func HandleJobStatus(store JobStatusStore) http.HandlerFunc {
+// Query parameters:
+//
+//	job — optional; when provided, only the named job is returned.
+//
+// Response shape:
+//
+//	{
+//	  "<job-name>": { "ok": true, "at": "<RFC3339>" },
+//	  ...
+//	}
+func HandleJobStatus(store *jobstatus.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		all := store.All()
+		result := make(map[string]jobstatus.Entry)
 
-		if name := r.URL.Query().Get("job"); name != "" {
-			e, ok := store.Get(name)
-			if !ok {
-				w.WriteHeader(http.StatusNotFound)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
-				return
+		if job := r.URL.Query().Get("job"); job != "" {
+			if entry, ok := store.Get(job); ok {
+				result[job] = entry
 			}
-			_ = json.NewEncoder(w).Encode(e)
-			return
+		} else {
+			for k, v := range all {
+				result[k] = v
+			}
 		}
 
-		_ = json.NewEncoder(w).Encode(store.All())
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			http.Error(w, "encoding error", http.StatusInternalServerError)
+		}
 	}
 }
