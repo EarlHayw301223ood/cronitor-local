@@ -58,3 +58,23 @@ func (f *Filter) Match(name string, jobTags []string) bool {
 func (f *Filter) IsEmpty() bool {
 	return len(f.names) == 0 && len(f.tags) == 0
 }
+
+// Names returns the set of name criteria as a slice.
+// The order of elements is not guaranteed.
+func (f *Filter) Names() []string {
+	result := make([]string, 0, len(f.names))
+	for n := range f.names {
+		result = append(result, n)
+	}
+	return result
+}
+
+// Tags returns the set of tag criteria as a slice.
+// The order of elements is not guaranteed.
+func (f *Filter) Tags() []string {
+	result := make([]string, 0, len(f.tags))
+	for t := range f.tags {
+		result = append(result, t)
+	}
+	return result
+}
