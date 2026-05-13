@@ -21,6 +21,9 @@ type throttleEntry struct {
 //
 // GET /throttle          — all jobs
 // GET /throttle?job=name — single job
+//
+// Responds with 404 when a specific job filter is provided but no matching
+// entry exists in the snapshot.
 func HandleThrottle(store ThrottleSnapshotter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -38,6 +41,12 @@ func HandleThrottle(store ThrottleSnapshotter) http.HandlerFunc {
 			}
 			entries = append(entries, throttleEntry{Job: job, LastDispatch: ts})
 		}
+
+		if filter != "" && len(entries) == 0 {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+
 		if entries == nil {
 			entries = []throttleEntry{}
 		}
